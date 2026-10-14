@@ -120,6 +120,8 @@ function UserMenu() {
  * foco, e embaixo do título da tela, na grade. */
 export function Topbar() {
   const mode = useDashboardStore((s) => s.mode);
+  const screen = useDashboardStore((s) => s.screen);
+  const setScreen = useDashboardStore((s) => s.setScreen);
   const start = useDashboardStore((s) => s.start);
   const stop = useDashboardStore((s) => s.stop);
   const running = useDashboardStore((s) => s.running);
@@ -141,6 +143,10 @@ export function Topbar() {
         <Wordmark />
       </span>
       <div className="appbar-actions">
+        <button type="button" className={screen === "journey" ? "primary" : "ghost"}
+          aria-current={screen === "journey" ? "page" : undefined} onClick={() => setScreen("journey")}>
+          Jornada
+        </button>
         {mode === "operator" && <OperadorSemSetor />}
         <button type="button" className="ghost" onClick={() => setCommandPaletteOpen(true)}>
           Buscar <kbd>Ctrl K</kbd>

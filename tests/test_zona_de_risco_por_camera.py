@@ -54,7 +54,7 @@ def test_worker_novo_nasce_com_a_zona_salva(real_monitor_app, real_monitor_clien
         from app.extensions import db
 
         camera = db.session.get(Camera, a)
-        novo = monitor._build_worker(camera, is_default=False)
+    novo = monitor._build_worker(camera)
     assert novo.risk_area_state()["polygon"] == [{"x": p["x"], "y": p["y"]} for p in ZONA_B]
 
 

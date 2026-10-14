@@ -24,6 +24,7 @@ from app.models import ROLE_OPERATOR, ROLE_TECHNICAL, Camera, User
 from app.repositories.alert_repository import AlertRepository
 from app.services.alert_state_service import AlertStateService
 from app.services.auth_service import AuthService
+from app.services.risk_rules import RuleAlert
 
 SENHA = "senha-forte-de-teste"
 
@@ -154,3 +155,36 @@ def test_escopo_do_socket_acompanha_a_troca_de_setor(app):
 
     emitir_alertas_da_camera(app, app.config["ID_PORTARIA"])
     assert eventos(cliente, "active_alerts") == [], "Ana ainda recebe da Portaria depois de sair de la"
+
+
+def test_falso_positivo_na_camera_secundaria_nao_emite_alerta_da_padrao(app):
+    ana = conectar(app, "ana@fabrica.com")
+    bruno = conectar(app, "bruno@fabrica.com")
+    with app.app_context():
+        monitor = app.extensions["monitor_service"]
+        monitor.load_cameras_from_db()
+        criados = {}
+        for camera_id in (app.config["ID_PORTARIA"], app.config["ID_ALMOX"]):
+            state = monitor._get_worker(camera_id).alert_state_service
+            state.create_after_frames = 1
+            criados[camera_id] = state.process([
+                RuleAlert("missing_helmet", "critical", "Sem capacete", "helmet", {"person_id": "person_1"})
+            ])["created"][0]["id"]
+    ana.get_received()
+    bruno.get_received()
+    cliente = app.test_client()
+    assert cliente.post("/api/auth/login", json={"email": "bruno@fabrica.com", "password": SENHA}).status_code == 200
+    alvo = criados[app.config["ID_ALMOX"]]
+    resposta = cliente.post(f"/alerts/{alvo}/false-positive", json={"reason": "revisado"})
+    assert resposta.status_code == 200
+    with app.app_context():
+        state = monitor._workers[app.config["ID_ALMOX"]].alert_state_service
+        assert state.active_alerts() == []
+        assert state.process([], deteccao_nova=False)["active"] == []
+    assert eventos(ana, "active_alerts") == []
+    recebidos = eventos(bruno, "active_alerts")
+    assert recebidos
+    for payload in recebidos:
+        assert payload["camera_id"] == app.config["ID_ALMOX"]
+        assert all(item["camera_id"] == payload["camera_id"] for item in payload["items"])
+        assert all(item["id"] != alvo for item in payload["items"])

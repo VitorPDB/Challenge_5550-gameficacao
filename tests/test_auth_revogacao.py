@@ -247,8 +247,7 @@ class TestSocket:
             alvo = User.query.filter_by(email="technical@fabrica.com").first()
             AuthService().set_password(alvo, "senha-nova-bem-longa")
 
-        ws.emit("revalidate")
-        assert not ws.is_connected(), "o socket precisa cair depois da revogação"
+        assert not ws.is_connected(), "o servidor deve derrubar o socket sem cooperação do cliente"
 
     def test_socket_sobrevive_a_revalidacao_com_sessao_valida(self, app):
         from app.extensions import socketio

@@ -1,5 +1,13 @@
 # VisionEPI
 
+Revisão do piloto com cinco câmeras, correções e resultados de validação:
+[Revisão da branch com rebrand](docs/REVISAO-REBRAND.md).
+
+Novos recursos para o NEXT — trajetórias, zonas, exposição postural, missões e
+laboratório: [uso e limites da prevenção](docs/PREVENCAO-NEXT.md).
+
+Gamificação: [níveis, conquistas e metas da jornada de prevenção](docs/GAMIFICACAO.md).
+
 Sistema de monitoramento de segurança industrial em tempo real, desenvolvido para o **Challenge 2026 — Metaindústria** (FIAP × SPI Integração). Usa visão computacional para detectar uso de EPIs, analisar postura e comportamento, e sinalizar risco antes que o incidente aconteça — não apenas registrar a infração depois do fato.
 
 ## O problema
@@ -122,7 +130,7 @@ Em desenvolvimento, o Vite roda como servidor separado (`:5173`) com proxy para 
 
 ### Pré-requisitos
 - **Python 3.11 ou 3.12** — não 3.13+. `mediapipe==0.10.14` e `numpy==1.26.4` não publicam wheel para versões acima da 3.12, e `pip install` falha antes de instalar qualquer coisa.
-- Node.js + npm
+- Node.js 20.19+ ou 22.12+ e npm (requisito do build com Vite 7; [migração oficial](https://v7.vite.dev/guide/migration#node-js-support))
 - (Opcional) Docker, se for usar PostgreSQL em vez de SQLite
 
 ### Backend

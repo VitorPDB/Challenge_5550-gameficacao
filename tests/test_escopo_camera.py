@@ -24,6 +24,7 @@ SENHA = "senha-forte-de-teste"
 @pytest.fixture()
 def app(tmp_path):
     class Cfg(AuthTestConfig):
+        SNAPSHOT_DIR = str(tmp_path / "snapshots")
         SQLALCHEMY_DATABASE_URI = f"sqlite:///{tmp_path / 'escopo.db'}"
 
     app = create_app(Cfg)
@@ -231,3 +232,64 @@ def test_atribuir_setor_muda_o_que_a_pessoa_ve(app):
     corpo = ana.get("/api/cameras").get_json()
     assert corpo["count"] == 1
     assert corpo["items"][0]["name"] == "Almoxarifado"
+
+
+@pytest.mark.parametrize("path", ["/risk-score", "/risk-score/trend"])
+@pytest.mark.parametrize("query", ["", "?camera_id=1", "?camera_id=2"])
+def test_risco_sem_setor_nao_entrega_o_parque(app, path, query):
+    cliente = entrar(app, "semsetor@fabrica.com")
+    resposta = cliente.get(path + query)
+    assert resposta.status_code == 403
+    assert resposta.get_json()["code"] == "sem_camera_atribuida"
+
+
+@pytest.fixture()
+def evidencias(app):
+    from pathlib import Path
+
+    directory = Path(app.config["SNAPSHOT_DIR"])
+    directory.mkdir()
+    with app.app_context():
+        for camera_id, filename in [(app.config["ID_PORTARIA"], "portaria.jpg"), (app.config["ID_ALMOX"], "almox.jpg")]:
+            alert = AlertRepository().list_recent(camera_id=camera_id)[0]
+            AlertRepository().update_frame_ref(alert, f"/snapshots/{filename}")
+            (directory / filename).write_bytes(filename.encode())
+        (directory / "orfao.jpg").write_bytes(b"sem alerta")
+    return directory
+
+
+def test_snapshot_direto_respeita_setor(app, ana, evidencias):
+    assert ana.get("/snapshots/portaria.jpg").data == b"portaria.jpg"
+    assert ana.get("/snapshots/almox.jpg").status_code == 404
+
+
+def test_snapshot_direto_sem_setor_e_negado(app, evidencias):
+    cliente = entrar(app, "semsetor@fabrica.com")
+    assert cliente.get("/snapshots/portaria.jpg").status_code == 403
+
+
+def test_snapshot_sem_alerta_nao_e_publicado(tecnico, evidencias):
+    assert tecnico.get("/snapshots/orfao.jpg").status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/snapshots/almox.jpg", "/alerts/2/evidence"])
+def test_evidencia_historica_independe_de_worker(app, tecnico, evidencias, path):
+    with app.app_context():
+        Camera.query.delete()
+        db.session.commit()
+        app.extensions["monitor_service"].load_cameras_from_db()
+    resposta = tecnico.get(path)
+    assert resposta.status_code == 200
+    assert resposta.data == b"almox.jpg"
+    assert "no-store" in resposta.headers["Cache-Control"]
+
+
+def test_snapshot_sem_sessao_e_negado(app, evidencias):
+    assert app.test_client().get("/snapshots/portaria.jpg").status_code == 401
+
+
+def test_features_sem_camera_explicitada_respeitam_operador(app, ana):
+    response = ana.get("/features")
+    assert response.status_code == 200
+    assert response.get_json()["camera_id"] == app.config["ID_PORTARIA"]
+    assert entrar(app, "semsetor@fabrica.com").get("/features").status_code == 403

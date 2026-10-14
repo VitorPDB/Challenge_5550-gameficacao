@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from app.services.risk_score_service import compute_risk_score, compute_risk_trend
-from app.utils.auth import camera_scope, login_required
+from app.utils.auth import _operador_sem_setor, camera_scope, erro_fora_do_escopo, login_required
 
 risk_bp = Blueprint("risk", __name__)
 
@@ -24,12 +24,16 @@ def _camera_id() -> int | None:
 @risk_bp.get("/risk-score")
 @login_required
 def risk_score():
+    if _operador_sem_setor():
+        return erro_fora_do_escopo()
     return jsonify(compute_risk_score(camera_id=_camera_id()))
 
 
 @risk_bp.get("/risk-score/trend")
 @login_required
 def risk_score_trend():
+    if _operador_sem_setor():
+        return erro_fora_do_escopo()
     hours = request.args.get("hours", default=24, type=int)
     bucket_hours = request.args.get("bucket_hours", default=1, type=int)
     # Clamp: sparkline não precisa (nem deveria aceitar) baldes fora de uma

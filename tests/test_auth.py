@@ -6,6 +6,8 @@ Roda com `AUTH_REQUIRED=True` (ver AuthTestConfig) — o resto da suíte usa
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from app import create_app
 from app.config import AuthTestConfig
@@ -223,8 +225,7 @@ def test_toda_rota_exige_sessao(app, client):
         if regra.endpoint in PUBLICAS:
             continue
         metodo = "GET" if "GET" in regra.methods else sorted(regra.methods - {"HEAD", "OPTIONS"})[0]
-        caminho = regra.rule.replace("<int:alert_id>", "1").replace("<int:camera_id>", "1")
-        caminho = caminho.replace("<int:user_id>", "1").replace("<path:filename>", "x.jpg")
+        caminho = re.sub(r"<([^>]+)>", lambda match: "1" if match[1].startswith("int:") else "x.jpg", regra.rule)
         resposta = client.open(caminho, method=metodo)
         if resposta.status_code != 401:
             desprotegidas.append(f"{metodo} {regra.rule} -> {resposta.status_code}")
@@ -303,3 +304,55 @@ def test_supervisor_cria_operador_so_com_camera_cadastrada(app, client):
     assert client.post("/api/users", json=corpo).status_code == 400  # sem câmera
     assert client.post("/api/users", json=corpo | {"camera_id": 9999}).status_code == 400  # não existe
     assert client.post("/api/users", json=corpo | {"camera_id": cam_id}).status_code == 201
+
+
+@pytest.mark.parametrize(
+    "change", [{"active": False}, {"role": ROLE_OPERATOR}, {"camera_id": None}, {"password": "nova-senha-forte"}, "delete"]
+)
+def test_access_change_disconnects_open_socket_without_client_revalidation(app, change):
+    from app.extensions import socketio
+    from app.models import Camera
+
+    with app.app_context():
+        camera = Camera(name="Área A", source="0", source_type="USB")
+        db.session.add(camera)
+        user = User.query.filter_by(email="technical@fabrica.com").first()
+        user.camera_id = 1
+        db.session.commit()
+        user_id = user.id
+    target = app.test_client()
+    entrar(target, ROLE_TECHNICAL)
+    ws = socketio.test_client(app, flask_test_client=target)
+    assert ws.is_connected()
+    admin = app.test_client()
+    entrar(admin, ROLE_SUPERVISOR)
+    response = admin.delete(f"/api/users/{user_id}") if change == "delete" else admin.patch(f"/api/users/{user_id}", json=change)
+    assert response.status_code == 200
+    assert not ws.is_connected()
+    assert target.get("/status").status_code == 401
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_revoked_user_stops_receiving_existing_video_stream(app, monkeypatch, legacy):
+    from app.models import Camera
+
+    with app.app_context():
+        camera = Camera(name="Área A", source="0", source_type="USB")
+        db.session.add(camera)
+        db.session.commit()
+        camera_id = camera.id
+        user_id = User.query.filter_by(email="technical@fabrica.com").first().id
+    monitor = app.extensions["monitor_service"]
+    monkeypatch.setattr(monitor, "latest_jpeg", lambda **kwargs: b"image")
+    monkeypatch.setattr(monitor, "latest_jpeg_versionado", lambda **kwargs: (b"image", 1))
+    target = app.test_client()
+    entrar(target, ROLE_TECHNICAL)
+    response = target.get("/video_feed" if legacy else f"/api/cameras/{camera_id}/video_feed", buffered=False)
+    chunks = iter(response.response)
+    assert b"image" in next(chunks)
+    admin = app.test_client()
+    entrar(admin, ROLE_SUPERVISOR)
+    assert admin.patch(f"/api/users/{user_id}", json={"active": False}).status_code == 200
+    with pytest.raises(StopIteration):
+        next(chunks)
+    response.close()

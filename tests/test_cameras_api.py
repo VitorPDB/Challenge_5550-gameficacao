@@ -227,3 +227,37 @@ def test_rotas_legadas_respondem_404_sem_camera(real_monitor_client):
     response = real_monitor_client.get("/status")
     assert response.status_code == 404
     assert "hint" in response.get_json()
+
+
+def test_cinco_cameras_ip_tem_todas_as_regras_e_estado_independente(real_monitor_app, real_monitor_client):
+    monitor = real_monitor_app.extensions["monitor_service"]
+    ids = [
+        _create(real_monitor_client, name=f"Setor {i}", source_type="RTSP", source=f"rtsp://192.0.2.{i}/stream")
+        .get_json()["id"]
+        for i in range(1, 6)
+    ]
+    workers = [monitor._workers[camera_id] for camera_id in ids]
+    assert len({id(worker.feature_manager) for worker in workers}) == 5
+    assert len({id(worker.person_tracker) for worker in workers}) == 5
+    assert len({id(worker.detector) for worker in workers}) == 1
+    assert all(all(worker.feature_manager.is_enabled(key) for key in DEFAULT_CAMERA_FEATURES) for worker in workers)
+    original = workers[3]
+    response = real_monitor_client.put(f"/api/cameras/{ids[3]}", json={"features": {"gloves": False}})
+    assert response.status_code == 200
+    assert monitor._workers[ids[3]] is original
+    assert original.feature_manager.is_enabled("gloves") is False
+    assert all(worker.feature_manager.is_enabled("gloves") for worker in workers if worker is not original)
+
+
+def test_camera_padrao_respeita_regras_do_banco_e_features_acompanha_troca(real_monitor_app, real_monitor_client):
+    monitor = real_monitor_app.extensions["monitor_service"]
+    primeira = _create(real_monitor_client, features={"helmet": False}).get_json()["id"]
+    segunda = _create(real_monitor_client, name="Segunda", source="1", features={"vest": False}).get_json()["id"]
+    assert monitor._workers[primeira].feature_manager.is_enabled("helmet") is False
+    real_monitor_client.delete(f"/api/cameras/{primeira}")
+    response = real_monitor_client.patch("/features", json={"features": {"gloves": False}})
+    assert response.status_code == 200
+    assert monitor._workers[segunda].feature_manager.is_enabled("gloves") is False
+    assert monitor._workers[segunda].feature_manager.is_enabled("vest") is False
+    with real_monitor_app.app_context():
+        assert Camera.query.get(segunda).features_json["gloves"] is False

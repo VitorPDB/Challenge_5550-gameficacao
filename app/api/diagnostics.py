@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
+from flask import Blueprint, current_app, jsonify, request
 
-from flask import Blueprint, current_app, jsonify, request, send_from_directory
-
-from app.config import BASE_DIR
+from app.api.evidence import serve_alert_evidence
 from app.models import ROLE_TECHNICAL
+from app.repositories.alert_repository import AlertRepository
 from app.repositories.event_repository import EventRepository
 from app.utils.auth import _operador_sem_setor, camera_scope, escopo_ou_erro, login_required, require_role
 
@@ -119,11 +118,7 @@ def list_events():
 @runtime_bp.get("/snapshots/<path:filename>")
 @login_required
 def get_snapshot(filename: str):
-    monitor = current_app.extensions.get("monitor_service")
-    snapshot_dir = "runtime/snapshots"
-    if monitor is not None and hasattr(monitor, "snapshot_service"):
-        snapshot_dir = monitor.snapshot_service.snapshot_dir
-    directory = Path(snapshot_dir)
-    if not directory.is_absolute():
-        directory = Path(BASE_DIR) / directory
-    return send_from_directory(directory, filename, as_attachment=False)
+    alert = AlertRepository().get_by_frame_ref(f"/snapshots/{filename}")
+    if alert is None:
+        return jsonify({"error": "evidência não encontrada"}), 404
+    return serve_alert_evidence(alert)

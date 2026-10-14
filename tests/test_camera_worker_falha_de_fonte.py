@@ -201,11 +201,21 @@ def worker(monkeypatch):
 
 
 @pytest.fixture()
-def worker_com_reserva(monkeypatch):
-    """Com a fixture real como reserva, no teto de 5 tentativas."""
+def worker_com_reserva(monkeypatch, tmp_path):
+    """Decodifica um vídeo local de verdade sem depender de download externo."""
+    import cv2
+
+    fixture = tmp_path / "bench.mp4"
+    writer = cv2.VideoWriter(str(fixture), cv2.VideoWriter_fourcc(*"mp4v"), 12, (960, 540))
+    assert writer.isOpened(), "codec mp4v indisponível para criar a fixture de teste"
+    try:
+        for _ in range(12):
+            writer.write(np.full((540, 960, 3), 80, dtype=np.uint8))
+    finally:
+        writer.release()
 
     class ComReserva(TestConfig):
-        RTSP_FIXTURE_FALLBACK = "tests/fixtures/bench.mp4"
+        RTSP_FIXTURE_FALLBACK = str(fixture)
         RTSP_MAX_TENTATIVAS = 5
 
     yield from _worker_de_teste(monkeypatch, ComReserva)
@@ -229,7 +239,15 @@ def rodar_loop(worker, iteracoes: int) -> None:
 def rodar_ate_frames(worker, quantos: int) -> None:
     """Roda `_loop` até PUBLICAR `quantos` frames novos."""
     alvo = worker._frame_counter + quantos
-    worker._running = RodarAte(lambda: worker._frame_counter < alvo)
+    tentativas = 0
+
+    def continuar():
+        nonlocal tentativas
+        tentativas += 1
+        assert tentativas <= 100, f"o loop não publicou {quantos} frames; último erro: {worker._last_error}"
+        return worker._frame_counter < alvo
+
+    worker._running = RodarAte(continuar)
     worker._loop()
 
 

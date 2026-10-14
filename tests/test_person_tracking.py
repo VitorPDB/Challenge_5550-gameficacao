@@ -148,7 +148,10 @@ def test_uso_incorreto_nao_rebaixa_quem_ja_esta_ok():
     já está em conformidade."""
     p = person(100)
     correto = helmet_on(p)
-    solto = Detection(label="helmet", confidence=0.6, box=BoundingBox(p.box.x1 + 10, p.box.y1 + 200, p.box.x1 + 50, p.box.y1 + 240), category="ppe")
+    solto = Detection(
+        label="helmet", confidence=0.6,
+        box=BoundingBox(p.box.x1 + 10, p.box.y1 + 200, p.box.x1 + 50, p.box.y1 + 240), category="ppe",
+    )
     people = _build([p, correto, solto])
     assert people[0]["ppe"]["helmet"]["status"] == "ok"
 
@@ -158,7 +161,10 @@ def test_epi_incorreto_gera_alerta_proprio_sem_apagar_o_de_ausente_de_outro():
     a mensagem precisa dizer "uso incorreto", não "ausente"."""
     engine_local = engine(supported=("helmet", "vest", "gloves", "safety_shoe"))
     p = person(100)
-    calcado_na_cabeca = Detection(label="safety_shoe", confidence=0.9, box=BoundingBox(p.box.x1 + 20, p.box.y1 + 5, p.box.x1 + 60, p.box.y1 + 50), category="ppe")
+    calcado_na_cabeca = Detection(
+        label="safety_shoe", confidence=0.9,
+        box=BoundingBox(p.box.x1 + 20, p.box.y1 + 5, p.box.x1 + 60, p.box.y1 + 50), category="ppe",
+    )
     alerts = engine_local.evaluate([p, calcado_na_cabeca], pose=None, frame_shape=(450, 300, 3))
     incorreto = next(a for a in alerts if a.feature == "safety_shoe")
     assert incorreto.rule == "incorrect_safety_shoe"

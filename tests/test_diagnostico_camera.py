@@ -111,6 +111,16 @@ def worker():
 
 # Substream D1 da Dahua: 4:3, e NAO a resolucao do cadastro (960x540).
 FRAME = np.zeros((576, 704, 3), dtype=np.uint8)
+
+
+def test_diagnostico_identifica_frame_publicado_antigo(worker, monkeypatch):
+    monkeypatch.setattr("app.services.camera_worker.time.monotonic", lambda: 100.0)
+    assert worker.diagnostico()["imagem_desatualizada"] is True
+    worker._last_frame_at = 99.5
+    assert worker.diagnostico()["imagem_desatualizada"] is False
+    worker._last_frame_at = 95.0
+    assert worker.diagnostico()["imagem_desatualizada"] is True
+    assert worker.diagnostico()["idade_frame_s"] == 5.0
 ANALISE = FrameAnalysis(
     detections=[deteccao("person"), deteccao("helmet")], pose=None, risk_events=[], poses=[]
 )

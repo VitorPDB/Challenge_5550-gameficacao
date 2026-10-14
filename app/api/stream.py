@@ -6,6 +6,7 @@ from flask import Blueprint, Response, current_app, jsonify
 
 from app.api.placeholder import placeholder_jpeg
 from app.utils.auth import escopo_ou_erro, login_required
+from app.utils.stream_access import stream_access_check
 
 stream_bp = Blueprint("stream", __name__)
 
@@ -18,9 +19,12 @@ def video_feed():
         return erro
     monitor = current_app.extensions["monitor_service"]
     target_fps = max(1, current_app.config.get("TARGET_FPS", 12))
+    access_allowed = stream_access_check(camera_id)
 
     def generate():
         while True:
+            if not access_allowed():
+                return
             # LookupError = nenhuma câmera cadastrada (estado válido: o seed
             # automático foi removido). Sem este try o CameraNotFoundError
             # subia de dentro do generator, onde o errorhandler do app já não

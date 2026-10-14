@@ -155,6 +155,7 @@ class Camera(db.Model):
     risk_polygon = db.Column(db.JSON, nullable=True)
     # Modo portaria: EPIs obrigatórios. NULL = câmera fora do modo portaria.
     gate_required = db.Column(db.JSON, nullable=True)
+    prevention_json = db.Column(db.JSON, nullable=True)
     enabled = db.Column(db.Boolean, nullable=False, default=True)
     features_json = db.Column(db.JSON, nullable=False, default=lambda: dict(DEFAULT_CAMERA_FEATURES))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now, index=True)
@@ -173,6 +174,7 @@ class Camera(db.Model):
             "rotation": self.rotation,
             "risk_polygon": self.risk_polygon,
             "gate_required": self.gate_required,
+            "prevention": self.prevention_json or {},
             "enabled": self.enabled,
             # Merge com os defaults, não substituição: uma câmera cadastrada
             # ANTES de uma feature nova existir tem o JSON sem aquela chave, e
@@ -183,6 +185,45 @@ class Camera(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class PreventionMission(db.Model):
+    __tablename__ = "prevention_missions"
+    id = db.Column(db.Integer, primary_key=True)
+    camera_id = db.Column(db.Integer, nullable=False, index=True)
+    team = db.Column(db.String(120), nullable=False)
+    category = db.Column(db.String(80), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="open")
+    evidence = db.Column(db.String(1000), nullable=True)
+    created_by = db.Column(db.Integer, nullable=True)
+    submitted_by = db.Column(db.Integer, nullable=True)
+    verified_by = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utc_now, nullable=False)
+    verified_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    def to_dict(self):
+        return {"id": self.id, "camera_id": self.camera_id, "team": self.team, "category": self.category,
+                "title": self.title, "status": self.status, "evidence": self.evidence,
+                "created_by": self.created_by, "submitted_by": self.submitted_by, "verified_by": self.verified_by,
+                "created_at": self.created_at.isoformat(),
+                "verified_at": self.verified_at.isoformat() if self.verified_at else None,
+                "points": 100 if self.status == "verified" else 0}
+
+
+class ScenarioRun(db.Model):
+    __tablename__ = "scenario_runs"
+    id = db.Column(db.String(32), primary_key=True)
+    camera_id = db.Column(db.Integer, nullable=False, index=True)
+    owner_id = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="queued")
+    result_json = db.Column(db.JSON, nullable=True)
+    error = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
+
+    def to_dict(self):
+        return {"id": self.id, "camera_id": self.camera_id, "status": self.status, "result": self.result_json,
+                "error": self.error, "created_at": self.created_at.isoformat()}
 
 
 # Papeis, do menor pro maior privilegio. A hierarquia e explicita aqui porque

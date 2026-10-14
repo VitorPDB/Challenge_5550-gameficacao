@@ -9,6 +9,30 @@ import { CameraFocus } from "./components/camera-focus";
 import { CommandPalette } from "./components/command-palette";
 import { Panel } from "./components/common";
 import { LoginScreen } from "./components/login";
+import { MissionsPanel } from "./components/prevention";
+
+function JourneyScreen() {
+  const cameras = useDashboardStore(s => s.cameras);
+  const mode = useDashboardStore(s => s.mode);
+  const camId = useDashboardStore(s => s.camId);
+  const setScreen = useDashboardStore(s => s.setScreen);
+  const [selected, setSelected] = useState<number | null>(null);
+  const camera = cameras.find(c => c.id === selected) ?? cameras.find(c => c.id === camId) ?? cameras[0];
+  const roleText = mode === "supervisor" ? "Crie metas para as equipes e verifique as ações realizadas."
+    : mode === "technical" ? "Transforme necessidades do setor em missões e acompanhe a execução."
+      : "Participe das missões da equipe e envie as ações realizadas para revisão.";
+  return <div className="screen">
+    <ScreenHead title="Jornada de prevenção" sub={roleText} actions={<button type="button" className="ghost" onClick={() => {
+      window.history.replaceState(null, "", window.location.pathname);
+      setScreen(mode === "operator" ? "kiosk" : mode === "supervisor" ? "home" : "grid");
+    }}>Voltar à operação</button>} />
+    <p>Ganhe experiência por ações preventivas verificadas. Evolua em equipe, alcance metas e desbloqueie conquistas.</p>
+    {mode !== "operator" && cameras.length > 1 && <label>Setor<select value={camera?.id ?? ""}
+      onChange={e => setSelected(Number(e.target.value))}>{cameras.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
+    {camera ? <><p>Setor: <strong>{camera.name}</strong></p><MissionsPanel key={camera.id} cameraId={camera.id} /></>
+      : <p>Cadastre uma câmera ou peça ao supervisor para atribuir seu setor antes de iniciar a jornada.</p>}
+  </div>;
+}
 
 // Placeholder do dashboard agregado do Supervisor. O conteúdo de verdade
 // (risco consolidado, ranking por criticidade, feed combinado, auditoria de
@@ -99,6 +123,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  useEffect(() => {
+    if (!user) return;
+    const openJourney = () => { if (window.location.hash === "#journey") setScreen("journey"); };
+    openJourney();
+    window.addEventListener("hashchange", openJourney);
+    return () => window.removeEventListener("hashchange", openJourney);
+  }, [user?.id, setScreen]);
+
   if (!authChecked) {
     return <div className="login-shell" aria-busy="true" />;
   }
@@ -112,6 +144,8 @@ export default function App() {
   let content;
   if (camerasLoading) {
     content = <p className="centered-empty">Carregando câmeras…</p>;
+  } else if (screen === "journey") {
+    content = <JourneyScreen />;
   } else if (mode === "operator") {
     content =
       camId !== null ? (

@@ -7,6 +7,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
 from app.models import VALID_ROLES, User, utc_now
+from app.utils.connections import disconnect_user_sockets
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,7 @@ class AuthService:
         self.revoke_sessions(user, motivo="password_changed")
         db.session.commit()
         logger.info("password_changed", extra={"email": user.email})
+        disconnect_user_sockets(user.id)
         return user
 
     @staticmethod

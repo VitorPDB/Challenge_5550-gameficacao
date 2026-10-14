@@ -48,7 +48,6 @@ def test_rotulo_sobre_pilula_nao_estoura_o_frame():
 
 def test_caixa_da_pessoa_mostra_o_numero_dela(monkeypatch):
     import numpy as np
-
     from app.vision.annotator import FrameAnnotator
     from app.vision.schemas import BoundingBox, Detection
 

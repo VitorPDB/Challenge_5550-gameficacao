@@ -51,7 +51,7 @@ export type ViewMode = "operator" | "technical" | "supervisor";
 // Tela dentro do "espaço multi-câmera". Independente de `mode`: o mesmo
 // `mode` pode passear entre grid/foco (Técnico/Supervisor), e Operador fica
 // travado em "kiosk" (ver setMode e setScreenForMode abaixo).
-export type CameraScreen = "grid" | "focus" | "kiosk" | "overview" | "home" | "accounts";
+export type CameraScreen = "grid" | "focus" | "kiosk" | "overview" | "home" | "accounts" | "journey";
 
 // Acesso por papel. A FONTE é a sessão (`user.role`), não um seletor de tela —
 // e o backend valida de novo em cada rota, então isto aqui é só para a UI não
@@ -851,15 +851,20 @@ export function subscribeToServerEvents(): () => void {
     set((state) => ({ timeline: [event, ...state.timeline].slice(0, MAX_TIMELINE) }), false, "ws:timeline_event"),
   );
   on("alert_created", (alert) => {
-    if (belongsToFocusedCamera(alert)) upsertActiveAlert(alert);
+    if (!belongsToFocusedCamera(alert)) return;
+    upsertActiveAlert(alert);
     set({ lastAlertCreatedId: alert.id }, false, "ws:alert_created:lastId");
     if (!useDashboardStore.getState().muted && SEVERITIES_WITH_CHIME.has(alert.severity)) playAlertChime();
   });
-  on("alert", upsertActiveAlert); // legacy alias, same payload as alert_created
+  on("alert", (alert) => {
+    if (belongsToFocusedCamera(alert)) upsertActiveAlert(alert);
+  });
   on("alert_updated", (alert) => {
     if (belongsToFocusedCamera(alert)) upsertActiveAlert(alert);
   });
-  on("alert_resolved", resolveAlert);
+  on("alert_resolved", (alert) => {
+    if (belongsToFocusedCamera(alert)) resolveAlert(alert);
+  });
 
   if (!socket.connected) socket.connect();
 

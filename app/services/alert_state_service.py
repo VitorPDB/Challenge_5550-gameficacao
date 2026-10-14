@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
+from threading import RLock
 from time import monotonic
 from typing import Any
 
@@ -10,8 +12,8 @@ from flask_socketio import SocketIO
 from app.models import Alert
 from app.repositories.alert_repository import AlertRepository
 from app.services.risk_rules import RuleAlert
-from app.vision.schemas import BoundingBox
 from app.utils.salas import emitir_para_camera
+from app.vision.schemas import BoundingBox
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +85,21 @@ class AlertStateService:
         # renovação de um alerta que já está na tela. 0 desliga o espaçamento.
         self.intervalo_touch = max(0.0, float(intervalo_touch))
         self._states: dict[str, AlertRuntimeState] = {}
+        self._last_emitted_active: list[dict[str, Any]] | None = None
+        self._external_updates: dict[int, dict[str, Any]] = {}
+        self._updates_lock = RLock()
+
         # "Soneca" depois de um "resolver todos" manual. Sem ela, quem continua
         # sem o EPI recriava o mesmo alerta ~1 s depois (3 frames de histerese)
         # e o botao parecia nao fazer nada. Chave (regra+pessoa) -> ate quando
         # fica quieto e quantos frames seguidos a violacao ja esta ausente.
         self.silencio_apos_limpar = max(0.0, float(silencio_apos_limpar))
         self._silenciados: dict[str, dict[str, Any]] = {}
+
+    def apply_external_update(self, payload: dict[str, Any]) -> None:
+        """Recebe dados puros da API sem transportar ORM entre threads."""
+        with self._updates_lock:
+            self._external_updates[int(payload["id"])] = deepcopy(payload)
 
     @staticmethod
     def _caixa_da_pessoa(metadata: dict[str, Any] | None) -> BoundingBox | None:
@@ -171,6 +182,11 @@ class AlertStateService:
         O default é `True` para que qualquer chamador que não saiba de
         intercalação siga com o comportamento de antes.
         """
+        with self._updates_lock:
+            updates, self._external_updates = self._external_updates, {}
+        for state in list(self._states.values()):
+            if state.snapshot is not None and state.snapshot["id"] in updates:
+                state.snapshot = updates[state.snapshot["id"]]
         encerrados_por_desligar = self._resolver_features_desligadas(set(features_desligadas)) if features_desligadas else []
 
         if not deteccao_nova:
@@ -279,6 +295,9 @@ class AlertStateService:
         emitir_para_camera(self.socketio, evento, payload, self.camera_id)
 
     def _emit_active(self, active: list[dict[str, Any]]) -> None:
+        if active == self._last_emitted_active:
+            return
+        self._last_emitted_active = deepcopy(active)
         self._emitir("active_alerts", {"camera_id": self.camera_id, "items": active, "count": len(active)})
 
     def active_alerts(self) -> list[dict[str, Any]]:
@@ -290,8 +309,12 @@ class AlertStateService:
         commitava ao mesmo tempo. Ver comentário em AlertRuntimeState.snapshot.
         """
         items: list[dict[str, Any]] = []
+        with self._updates_lock:
+            updates = dict(self._external_updates)
         for state in list(self._states.values()):
             snapshot = state.snapshot
+            if snapshot is not None:
+                snapshot = updates.get(int(snapshot["id"]), snapshot)
             if snapshot is not None and snapshot.get("status") == "active":
                 items.append(snapshot)
         return sorted(items, key=lambda item: item.get("severity", ""), reverse=True)
@@ -326,3 +349,6 @@ class AlertStateService:
     def reset(self) -> None:
         self._states.clear()
         self._silenciados.clear()
+        self._last_emitted_active = None
+        with self._updates_lock:
+            self._external_updates.clear()

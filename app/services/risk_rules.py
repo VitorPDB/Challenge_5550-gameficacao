@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from app.services.feature_manager import FeatureManager
+from app.utils.geometry import point_in_polygon
 from app.vision.person_compliance_matcher import PPE_KEYS, PersonComplianceMatcher
 from app.vision.schemas import Detection, PoseResult
 
@@ -331,14 +332,4 @@ class RuleEngine:
 
     @staticmethod
     def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
-        x, y = point
-        inside = False
-        j = len(polygon) - 1
-        for i in range(len(polygon)):
-            xi, yi = polygon[i]
-            xj, yj = polygon[j]
-            intersects = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / max(yj - yi, 1e-12) + xi)
-            if intersects:
-                inside = not inside
-            j = i
-        return inside
+        return point_in_polygon(point, polygon)

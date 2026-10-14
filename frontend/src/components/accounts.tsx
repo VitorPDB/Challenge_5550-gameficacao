@@ -22,6 +22,10 @@ export function SupervisorHome() {
     <div className="screen">
       <ScreenHead title="Início" sub="O que você quer fazer?" />
       <div className="home-tiles">
+        <button type="button" className="home-tile" onClick={() => setScreen("journey")}>
+          <strong>Jornada de prevenção</strong>
+          <span>Gamificação: equipes, níveis, metas, conquistas e ações aguardando sua revisão.</span>
+        </button>
         <button type="button" className="home-tile" onClick={() => setScreen("grid")}>
           <strong>Câmeras</strong>
           <span>{cameras.length} câmera(s) cadastrada(s). Monitoramento, alertas, zonas e portaria.</span>

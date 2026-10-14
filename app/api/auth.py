@@ -8,6 +8,7 @@ from app.extensions import db
 from app.models import ROLE_SUPERVISOR, VALID_ROLES, Camera, User
 from app.services.auth_service import AuthError, AuthService, WeakPassword, normalize_email
 from app.utils.auth import current_user, login_required, login_user, logout_user, require_role
+from app.utils.connections import disconnect_user_sockets
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,8 @@ def update_user(user_id: int):
 
     payload = request.get_json(silent=True) or {}
     atual = current_user()
+    old_access = (usuario.role, usuario.camera_id, usuario.active)
+    old_epoch = usuario.session_epoch
 
     if "role" in payload:
         papel = str(payload["role"])
@@ -161,7 +164,11 @@ def update_user(user_id: int):
         except WeakPassword as exc:
             return jsonify({"error": str(exc)}), 400
 
+    if old_access != (usuario.role, usuario.camera_id, usuario.active) and usuario.session_epoch == old_epoch:
+        AuthService.revoke_sessions(usuario, motivo="access_changed")
     db.session.commit()
+    if usuario.session_epoch != old_epoch:
+        disconnect_user_sockets(usuario.id)
     return jsonify({"user": usuario.to_dict()})
 
 
@@ -177,5 +184,6 @@ def delete_user(user_id: int):
 
     db.session.delete(usuario)
     db.session.commit()
+    disconnect_user_sockets(user_id)
     logger.info("user_deleted", extra={"email": usuario.email})
     return jsonify({"deleted": True, "id": user_id})

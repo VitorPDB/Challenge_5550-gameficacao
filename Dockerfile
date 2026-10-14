@@ -50,4 +50,4 @@ EXPOSE 5000
 # -w 1 é obrigatório, não preferência: o estado das câmeras (workers, modelos
 # YOLO carregados, alertas ativos em memória) vive DENTRO do processo. Dois
 # workers = duas cópias divergentes disputando a mesma webcam.
-CMD ["sh", "-c", "gunicorn -k gthread -w 1 --threads 8 --timeout 120 -b 0.0.0.0:${PORT:-5000} wsgi:app"]
+CMD ["sh", "-c", "gunicorn -k gthread -w 1 --threads ${GUNICORN_THREADS:-32} --timeout 120 -b 0.0.0.0:${PORT:-5000} wsgi:app"]

@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, jsonify, request
 
+from app.api.evidence import serve_alert_evidence
 from app.models import ROLE_OPERATOR, ROLE_SUPERVISOR, ROLE_TECHNICAL
 from app.repositories.alert_repository import AlertRepository
 from app.repositories.event_repository import EventRepository
@@ -73,24 +74,7 @@ def get_alert_evidence(alert_id: int):
     alert = AlertRepository().get(alert_id)
     if alert is None:
         return jsonify({"error": "alerta não encontrado"}), 404
-    if not camera_permitida(alert.camera_id):
-        return erro_fora_do_escopo()
-    if not alert.frame_ref:
-        return jsonify({"error": "alerta sem evidência vinculada"}), 404
-
-    filename = Path(str(alert.frame_ref)).name
-    if not filename:
-        return jsonify({"error": "referência de evidência inválida"}), 404
-
-    monitor = current_app.extensions.get("monitor_service")
-    if monitor is None or not hasattr(monitor, "snapshot_service"):
-        return jsonify({"error": "serviço de evidências indisponível"}), 503
-
-    directory = monitor.snapshot_service.absolute_dir
-    filepath = directory / filename
-    if not filepath.exists():
-        return jsonify({"error": "arquivo de evidência não encontrado", "filename": filename}), 404
-    return send_from_directory(directory, filename, as_attachment=False)
+    return serve_alert_evidence(alert)
 
 
 @alerts_bp.post("/alerts/<int:alert_id>/false-positive")
@@ -257,6 +241,8 @@ def _log_and_broadcast(alert, alert_payload: dict, *, message: str, metadata: di
     `except: pass`.
     """
     monitor = current_app.extensions.get("monitor_service")
+    if monitor is not None and hasattr(monitor, "update_alert_snapshot"):
+        monitor.update_alert_snapshot(alert_payload)
     socketio = getattr(monitor, "socketio", None) or current_app.extensions.get("socketio")
     try:
         if broadcast_resolved:
@@ -286,15 +272,13 @@ def _log_and_broadcast(alert, alert_payload: dict, *, message: str, metadata: di
                 emitir_para_camera(socketio, "timeline_event", event_payload, alert.camera_id)
             if broadcast_resolved:
                 emitir_para_camera(socketio, "alert_resolved", alert_payload, alert.camera_id)
-                active = getattr(monitor, "alert_state_service", None)
-                if active is not None:
-                    items = active.active_alerts()
-                    emitir_para_camera(
-                        socketio,
-                        "active_alerts",
-                        {"camera_id": alert.camera_id, "items": items, "count": len(items)},
-                        alert.camera_id,
-                    )
+                items = [item.to_dict() for item in AlertRepository().list_active_for_camera(alert.camera_id)]
+                emitir_para_camera(
+                    socketio,
+                    "active_alerts",
+                    {"camera_id": alert.camera_id, "items": items, "count": len(items)},
+                    alert.camera_id,
+                )
             else:
                 emitir_para_camera(socketio, "alert_updated", alert_payload, alert.camera_id)
         return event_payload

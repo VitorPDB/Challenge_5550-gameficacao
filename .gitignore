@@ -27,6 +27,10 @@ tests/fixtures/_source/
 
 # Artefato do pytest-cov.
 .coverage
+.validation-*/
+.validation-*.json
+.validation-*.xml
+.pytest_cache/
 
 tests/fixtures/cenas/
 

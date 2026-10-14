@@ -20,7 +20,9 @@ from app.repositories.event_repository import EventRepository
 from app.services.alert_state_service import AlertStateService
 from app.services.compliance_service import ComplianceService
 from app.services.feature_manager import FeatureManager
-from app.services.risk_rules import RuleEngine
+from app.services.gate_service import GateState, avaliar_quadro
+from app.services.prevention_service import PreventionService, draw_prevention
+from app.services.risk_rules import RuleEngine, RuleEvaluation
 from app.services.risk_score_service import compute_risk_score
 from app.services.snapshot_service import SnapshotService
 from app.services.storage_cleanup_service import StorageCleanupService
@@ -28,7 +30,6 @@ from app.utils.salas import emitir_para_camera
 from app.vision.annotator import FrameAnnotator
 from app.vision.person_compliance_matcher import PPE_KEYS
 from app.vision.person_tracker import PersonTracker
-from app.services.gate_service import GateState, avaliar_quadro
 from app.vision.pose_estimator import MediaPipePoseEstimator
 from app.vision.schemas import FrameAnalysis, PoseResult
 from app.vision.video_stream import VideoStream
@@ -107,12 +108,16 @@ class CameraWorker:
         pose_estimator: MediaPipePoseEstimator,
         inference_lock: threading.Lock,
         servico_llm: Any | None = None,
+        prevention_config: dict | None = None,
     ) -> None:
         self.app = app
         self.socketio = socketio
         self.feature_manager = feature_manager
         self.camera_id = camera_id
+        self.prevention_service = PreventionService(prevention_config)
+        self._prevention_alerts = []
         self.target_fps = max(1, int(fps))
+        self.fps_configurado = self.target_fps
         # So um destes 4 valores tem sentido pra `cv2.rotate` — qualquer outro
         # vira 0 (sem rotacao) em vez de derrubar o worker.
         self.rotation = int(rotation) if int(rotation) in (0, 90, 180, 270) else 0
@@ -130,6 +135,7 @@ class CameraWorker:
         # nao a cada frame ruim (a 12 FPS seriam 12 eventos por segundo).
         self._last_stream_state: str | None = None
         self._frame_counter = 0
+        self._last_frame_at: float | None = None
         self._last_risk_score_emit_at = 0.0
         self.risk_score_interval_seconds = 30
 
@@ -280,11 +286,14 @@ class CameraWorker:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("stale_alert_cleanup_failed", extra={"error": str(exc)})
             self.alert_state_service.reset()
+            self.prevention_service.reset()
+            self._prevention_alerts = []
             self._emitir("active_alerts", {"camera_id": self.camera_id, "items": [], "count": 0})
             self._latest_jpeg = None
             self._latest_analysis = None
             self._last_error = None
             self._frame_counter = 0
+            self._last_frame_at = None
             # Sem isto, a câmera volta exibindo as caixas da sessão anterior
             # até a primeira inferência nova concluir.
             self._detect_counter = 0
@@ -339,6 +348,7 @@ class CameraWorker:
             "features": self.feature_manager.as_dict(),
             "model": self._safe_model_diagnostics(),
             "active_alerts": self.alert_state_service.active_alerts(),
+            "compliance": (self.latest_analysis() or {}).get("compliance"),
             "cleanup": self._last_cleanup,
             "overlay": self.overlay_options,
             "settings": self.settings(),
@@ -613,8 +623,6 @@ class CameraWorker:
         )
 
     def _loop(self) -> None:
-        target_fps = self.target_fps
-        frame_interval = 1.0 / target_fps
         jpeg_quality = int(self.app.config.get("JPEG_QUALITY", 80))
 
         with self.app.app_context():
@@ -633,6 +641,7 @@ class CameraWorker:
                     if not ok or frame is None:
                         self._handle_capture_failure()
                         continue
+                    observation_time = time.monotonic()
                     if self.rotation:
                         frame = self._aplicar_rotacao(frame)
 
@@ -650,6 +659,14 @@ class CameraWorker:
                         poses=analysis.poses,
                     )
                     self._perf_marca("regras")
+                    prevention, prevention_alerts = self.prevention_service.process(
+                        evaluation.people, evaluation.alerts, frame, observation_time, fresh=self._analise_foi_nova,
+                        risk_enabled=self.feature_manager.is_enabled("risk_area"),
+                        posture_enabled=self.feature_manager.is_enabled("pose") and self.feature_manager.is_enabled("posture"),
+                    )
+                    if self._analise_foi_nova:
+                        self._prevention_alerts = prevention_alerts
+                    evaluation = RuleEvaluation(evaluation.alerts + self._prevention_alerts, evaluation.people, evaluation.poses)
                     # `deteccao_nova` impede que uma inferência reaproveitada
                     # conte como confirmação nova na histerese.
                     alert_state = self.alert_state_service.process(
@@ -671,6 +688,8 @@ class CameraWorker:
                     if self.gate_required:
                         self._gate.atualizar(avaliar_quadro(compliance_state, self.gate_required))
 
+                    compliance_state["prevention"] = prevention
+
                     enabled_map = {item.key: item.enabled for item in self.feature_manager.list()}
                     annotated = self.annotator.annotate(
                         frame,
@@ -681,6 +700,8 @@ class CameraWorker:
                         self.overlay_options,
                     )
                     self._perf_marca("anotacao")
+                    if self.overlay_options.get("risk_area", True):
+                        draw_prevention(annotated, prevention)
                     self._attach_snapshots_and_log_events(alert_state, annotated)
                     alert_state["active"] = self.alert_state_service.active_alerts()
                     encode_ok, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
@@ -696,11 +717,13 @@ class CameraWorker:
                                 "alert_resolved": alert_state["resolved"],
                                 "compliance": compliance_state,
                                 "model": model_diagnostics,
+                                "prevention": prevention,
                                 # Campo PRÓPRIO, ao lado dos alertas e nunca
                                 # dentro deles: é opinião, não veredito.
                                 "segunda_opiniao": self._segunda_opiniao,
                             }
                             self._frame_counter += 1
+                            self._last_frame_at = time.monotonic()
 
                     # Fora da thread do loop: `submeter()` só marca o slot e
                     # entrega ao executor (11 microssegundos, docs/SPRINT3.md).
@@ -747,7 +770,7 @@ class CameraWorker:
                     time.sleep(1.0)
 
                 elapsed = time.perf_counter() - start_time
-                time.sleep(max(0.0, frame_interval - elapsed))
+                time.sleep(max(0.0, 1.0 / self.target_fps - elapsed))
 
     # ------------------------------------------------------- perfil do loop -
     # Diagnóstico de "por que o vídeo está travado". FPS médio engana: quadros
@@ -889,6 +912,7 @@ class CameraWorker:
         """
         agora = time.monotonic()
         instantes = [t for t in self._instantes_de_frame if agora - t <= JANELA_FPS_S]
+        frame_age = None if self._last_frame_at is None else max(0.0, agora - self._last_frame_at)
         fps = 0.0
         if len(instantes) >= 2:
             decorrido = instantes[-1] - instantes[0]
@@ -912,6 +936,8 @@ class CameraWorker:
         )
         return {
             "fps": round(fps, 1),
+            "idade_frame_s": None if frame_age is None else round(frame_age, 2),
+            "imagem_desatualizada": frame_age is None or frame_age > max(2.0, 3.0 / self.target_fps),
             "brilho": None if self._brilho is None else round(self._brilho, 2),
             "fonte_sem_imagem": bool(sem_imagem),
             "brilho_minimo": self.brilho_minimo,
@@ -1093,12 +1119,15 @@ class CameraWorker:
             if self._needs_yolo_detection():
                 ppe_detections = self.detector.detect(frame)
                 self._perf_marca("yolo")
-                people = []
                 if self.app.config.get("MULTI_PERSON_DETECTION", True):
                     # Só as pessoas passam pelo tracker — EPIs são associados
                     # geometricamente a elas (PersonComplianceMatcher), não
                     # rastreados por conta própria.
-                    people = self.person_tracker.update(self.person_detector.detect(frame))
+                    raw_people = self.person_detector.detect(frame)
+                else:
+                    raw_people = [d for d in ppe_detections if d.label == "person" or d.category == "person"]
+                people = self.person_tracker.update(raw_people)
+                ppe_detections = [d for d in ppe_detections if d.label != "person" and d.category != "person"]
                 ppe_detections = self._gate_ppe_to_people(ppe_detections, people)
                 detections = ppe_detections + people
             if self.feature_manager.is_enabled("pose"):
@@ -1152,6 +1181,8 @@ class CameraWorker:
             desligadas |= set(PPE_KEYS)
         if "pose" in desligadas:
             desligadas |= {"falls", "posture"}
+        if not self.prevention_service.config["enabled"]:
+            desligadas.add("prevention")
         return desligadas
 
     def _needs_yolo_detection(self) -> bool:
@@ -1159,6 +1190,7 @@ class CameraWorker:
             self.app.config.get("MULTI_PERSON_DETECTION", True)
             or self.feature_manager.is_enabled("ppe")
             or self.feature_manager.is_enabled("risk_area")
+            or self.prevention_service.config["enabled"]
         )
 
     def _safe_model_diagnostics(self) -> dict[str, Any]:
@@ -1173,7 +1205,7 @@ class CameraWorker:
             }
         diagnostics = dict(self.detector.diagnostics())
         multi_person = bool(self.app.config.get("MULTI_PERSON_DETECTION", True))
-        person_supported = False
+        person_supported = bool(diagnostics.get("person_supported"))
         warning_parts = [diagnostics.get("warning")] if diagnostics.get("warning") else []
         if multi_person:
             person_diagnostics = self.person_detector.diagnostics()
@@ -1208,7 +1240,7 @@ class CameraWorker:
         return {
             "camera_id": self.camera_id,
             "video_source": redigir_segredos(str(self.video_stream.source)),
-            "target_fps": int(self.app.config.get("TARGET_FPS", 12)),
+            "target_fps": self.target_fps,
             "jpeg_quality": int(self.app.config.get("JPEG_QUALITY", 80)),
             "yolo_confidence": float(self.detector.confidence),
             "yolo_max_detections": int(self.detector.max_detections),
@@ -1234,6 +1266,9 @@ class CameraWorker:
             if key not in updates:
                 continue
             value = max(minimum, min(maximum, int(updates[key])))
+            if key == "target_fps":
+                self.target_fps = value
+                continue
             self.app.config[config_key] = value
             if key == "yolo_max_detections":
                 self.detector.max_detections = value
@@ -1326,7 +1361,11 @@ class CameraWorker:
         return {"camera_id": self.camera_id, **self.overlay_options}
 
     def update_overlay(self, updates: dict[str, Any]) -> dict[str, Any]:
-        for key in ("boxes", "labels", "confidence", "pose", "risk_area", *(f"part_{p}" for p in ("head", "face", "ear", "hands", "foot", "tool"))):
+        keys = (
+            "boxes", "labels", "confidence", "pose", "risk_area",
+            *(f"part_{p}" for p in ("head", "face", "ear", "hands", "foot", "tool")),
+        )
+        for key in keys:
             if key in updates:
                 self.overlay_options[key] = bool(updates[key])
         self._emitir("overlay_updated", self.get_overlay())

@@ -137,7 +137,10 @@ class FrameAnnotator:
 
         # Rotulos anatomicos do SH17 (head/face/ear/hands/foot): so servem de
         # contexto, entao ficam escondidos a menos que o operador ligue.
-        detections = [d for d in detections if d.label.lower() not in self._PARTES or options.get(f"part_{self._PARTES[d.label.lower()]}", False)]
+        detections = [
+            d for d in detections
+            if d.label.lower() not in self._PARTES or options.get(f"part_{self._PARTES[d.label.lower()]}", False)
+        ]
 
         sem_epi = self._caixas_sem_epi(compliance_state)
         conformes: list[Detection] = []

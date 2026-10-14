@@ -289,6 +289,8 @@ export interface VideoStreamStatus {
 // está limitada". `resolucao` é a do frame que CHEGOU — em RTSP o backend
 // FFMPEG ignora a resolução pedida no cadastro.
 export interface CameraDiagnostico {
+  idade_frame_s?: number | null;
+  imagem_desatualizada?: boolean;
   fps: number;
   resolucao: string | null;
   largura: number;
@@ -310,6 +312,7 @@ export interface CameraDiagnostico {
 }
 
 export interface MonitorStatus extends CameraScoped {
+  compliance?: ComplianceState | null;
   running: boolean;
   frame_counter: number;
   last_error: string | null;

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.utils.geometry import point_in_polygon
 from app.vision.schemas import BoundingBox, Detection
 
 PPE_KEYS = ("helmet", "vest", "gloves", "glasses", "mask", "safety_shoe", "ear_protection")
@@ -282,14 +283,4 @@ class PersonComplianceMatcher:
 
     @staticmethod
     def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
-        x, y = point
-        inside = False
-        j = len(polygon) - 1
-        for i in range(len(polygon)):
-            xi, yi = polygon[i]
-            xj, yj = polygon[j]
-            intersects = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / max(yj - yi, 1e-12) + xi)
-            if intersects:
-                inside = not inside
-            j = i
-        return inside
+        return point_in_polygon(point, polygon)

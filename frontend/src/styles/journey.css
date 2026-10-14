@@ -1,0 +1,12 @@
+.journey-teams { display: grid; gap: var(--s4); margin-block: var(--s4); }
+.journey-team { padding: var(--s4); border: 1px solid var(--hairline); border-radius: var(--r-card); }
+.journey-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
+.journey-heading h3 { margin: 0; }
+.journey-progress { width: 100%; height: 12px; accent-color: var(--accent); }
+.journey-goal { padding-block: var(--s3); }
+.journey-badges { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--s3); margin-block: var(--s3); }
+.journey-badge { padding: var(--s3); border: 1px solid var(--hairline); border-radius: var(--r-control); }
+.journey-badge.earned { border-color: var(--accent); }
+.journey-badge.locked { background: var(--sunken); }
+.journey-team details summary { cursor: pointer; padding-block: var(--s2); }
+.journey-team p { overflow-wrap: anywhere; }

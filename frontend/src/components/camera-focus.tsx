@@ -5,6 +5,7 @@ import { Tabs, Panel, EmptyState, type TabItem } from "./common";
 import { RiskAreaEditorPanel, RiskEditorCanvas } from "./video";
 import { GateConfigPanel } from "./gate";
 import { LlmPanel } from "./llm-panel";
+import { MissionsPanel, PreventionPanel, ScenarioPanel } from "./prevention";
 import { ChecklistPanel, ModelStatusPanel, SettingsPanel } from "./diagnostics";
 import { RiskScoreCard } from "./risk-score";
 import { AlertPanel, AlertHistoryPanel, SafetyEventsPanel } from "./alerts";
@@ -421,6 +422,11 @@ export function CameraFocus() {
     if (tab.key === "logs") return { ...tab, content: <LogsPanel /> };
     return tab;
   });
+  tabs.push(
+    { key: "prevention", label: "Prevenção", content: <PreventionPanel key={camera.id} cameraId={camera.id} /> },
+    { key: "missions", label: "Missões", content: <MissionsPanel key={camera.id} cameraId={camera.id} /> },
+    { key: "scenarios", label: "Laboratório", content: <ScenarioPanel key={camera.id} cameraId={camera.id} /> },
+  );
 
   const sub = [camera.location, `${camera.source_type} ${camera.source}`].filter(Boolean).join(", ");
 

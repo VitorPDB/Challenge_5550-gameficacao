@@ -13,7 +13,9 @@ from app.api.cameras import cameras_bp
 from app.api.diagnostics import runtime_bp
 from app.api.features import features_bp
 from app.api.monitor import monitor_bp
+from app.api.prevention import prevention_bp
 from app.api.risk import risk_bp
+from app.api.scenarios import scenarios_bp
 from app.api.status import status_bp
 from app.api.stream import stream_bp
 from app.cli import register_cli
@@ -22,7 +24,9 @@ from app.extensions import db, migrate, socketio
 from app.models import Alert, User  # noqa: F401  (registra os modelos no metadata)
 from app.services.feature_manager import FeatureManager
 from app.services.monitor_service import CameraNotFoundError, MonitorService
+from app.services.scenario_service import ScenarioService
 from app.utils.auth import current_user
+from app.utils.connections import user_room
 from app.utils.logging_config import configure_logging
 from app.utils.salas import salas_do_usuario
 
@@ -70,6 +74,8 @@ def create_app(config_class: type[Config] = Config) -> Flask:
 
     app = Flask(__name__, static_folder="static")
     app.config.from_object(config_class)
+    if not app.config.get("MAX_CONTENT_LENGTH"):
+        app.config["MAX_CONTENT_LENGTH"] = 130 * 1024 * 1024
 
     _validar_secret_key(app)
     if app.config.get("AUTH_REQUIRED", True) and not app.config.get("SESSION_COOKIE_SECURE") and not app.config.get("DEBUG"):
@@ -93,6 +99,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
 
     app.extensions["feature_manager"] = feature_manager
     app.extensions["monitor_service"] = monitor_service
+    app.extensions["scenario_service"] = ScenarioService(app)
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(status_bp)
@@ -103,6 +110,8 @@ def create_app(config_class: type[Config] = Config) -> Flask:
     app.register_blueprint(stream_bp)
     app.register_blueprint(runtime_bp)
     app.register_blueprint(risk_bp)
+    app.register_blueprint(prevention_bp)
+    app.register_blueprint(scenarios_bp)
 
     # Cobre toda rota LEGADA que opera sobre "a câmera padrão" (/start,
     # /stop, /status, /preflight, /settings, /overlay, /risk-area,
@@ -133,6 +142,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
         # detectadas) chegando a quem foi desativado ou trocou a senha.
         socket_session["user_id"] = usuario.id
         socket_session["epoch"] = usuario.session_epoch
+        join_room(user_room(usuario.id))
         # O escopo de câmera do Operador precisa valer aqui também. Enquanto
         # todo emit era broadcast, ele recebia o feed inteiro do parque pelo
         # socket mesmo levando 404 nas rotas REST das outras áreas.
@@ -182,6 +192,7 @@ def create_app(config_class: type[Config] = Config) -> Flask:
         # dele pela tela/API, nada fictício nasce sozinho.
         try:
             monitor_service.load_cameras_from_db()
+            app.extensions["scenario_service"].recover_interrupted()
         except Exception as exc:  # noqa: BLE001
             # Banco ainda sem a tabela `cameras`. É o caso NORMAL de
             # `flask --app wsgi db upgrade`, que constrói a aplicação ANTES de

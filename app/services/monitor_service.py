@@ -8,12 +8,13 @@ from flask_socketio import SocketIO
 
 from app.config import Config
 from app.extensions import db
-from app.models import Camera
+from app.models import DEFAULT_CAMERA_FEATURES, Camera
 from app.services.camera_worker import CameraWorker
 from app.services.feature_manager import FeatureManager
 from app.services.llm_risk_service import ServicoDeRiscoLLM
-from app.vision.pose_estimator import MediaPipePoseEstimator
+from app.services.prevention_service import validate_config
 from app.vision.ensemble_ppe_detector import EnsemblePPEDetector
+from app.vision.pose_estimator import MediaPipePoseEstimator
 from app.vision.yolo_ppe_detector import YoloPPEDetector
 
 
@@ -35,10 +36,9 @@ class MonitorService:
     linha em app/api/*.py. camera_id explícito só passa a ser usado pelas
     rotas a partir do Passo 5.
 
-    Limitação conhecida deste passo (documentada, não escondida): Alert e
-    EventLog ainda não têm coluna camera_id — alertas/eventos de câmeras
-    diferentes caem juntos no mesmo histórico por enquanto. Corrigido no
-    Passo 5 (camera_id em toda API/evento).
+    Regras e rastreamento são isolados por câmera. O lock dos modelos
+    compartilhados garante chamadas seguras, mas também serializa inferências;
+    a espera deve ser medida com as cinco câmeras em execução.
     """
 
     def __init__(self, app: Flask, socketio: SocketIO, feature_manager: FeatureManager) -> None:
@@ -163,17 +163,31 @@ class MonitorService:
                 existing = self._workers.get(camera.id)
                 if existing is None:
                     # câmera nova — cria worker do zero, ainda parado
-                    self._workers[camera.id] = self._build_worker(camera, is_default=camera.id == default_id)
+                    self._workers[camera.id] = self._build_worker(camera)
                     continue
                 if self._worker_config_changed(existing, camera):
                     was_running = existing.status().get("running", False)
                     self._stop_and_discard_worker(camera.id)
-                    new_worker = self._build_worker(camera, is_default=camera.id == default_id)
+                    new_worker = self._build_worker(camera)
                     self._workers[camera.id] = new_worker
                     if was_running:
                         new_worker.start()
+                else:
+                    if existing.prevention_service.config != validate_config(camera.prevention_json or {}):
+                        existing.prevention_service.configure(camera.prevention_json or {})
+                        existing._prevention_alerts = []
+                        existing._cached_analysis = None
+                    features = self._camera_features(camera)
+                    if existing.features_configuradas != features:
+                        existing.feature_manager.update(features)
+                        existing.features_configuradas = features
+                        existing._cached_analysis = None
+                        existing._detect_counter = 0
 
             self._default_camera_id = default_id
+            if default_id is not None:
+                self.feature_manager = self._workers[default_id].feature_manager
+                self.app.extensions["feature_manager"] = self.feature_manager
 
     @staticmethod
     def _worker_config_changed(worker: CameraWorker, camera: Camera) -> bool:
@@ -187,23 +201,21 @@ class MonitorService:
         new_source = str(Config.parse_video_source(camera.source))
         return (
             current_source != new_source
-            or worker.target_fps != camera.fps
+            or worker.fps_configurado != camera.fps
             or worker.video_stream.width != camera.width
             or worker.video_stream.height != camera.height
             or worker.rotation != int(camera.rotation or 0)
         )
 
-    def _build_worker(self, camera: Camera, *, is_default: bool) -> CameraWorker:
-        # A câmera padrão (menor id) usa o FeatureManager GLOBAL compartilhado
-        # — é o que faz a rota /features (PATCH global) continuar controlando
-        # exatamente essa câmera, sem quebrar o frontend atual. Câmeras
-        # adicionais recebem seu próprio FeatureManager, seedado do banco
-        # (Camera.features_json) — ainda não há rota pra editar isso em
-        # runtime além do PUT /api/cameras (que grava no banco, mas não
-        # empurra pro worker já rodando — limitação conhecida, resolvida
-        # quando /features ganhar suporte a camera_id no Passo 5).
-        feature_manager = self.feature_manager if is_default else FeatureManager.from_camera_features(camera.features_json or {})
-        return CameraWorker(
+    @staticmethod
+    def _camera_features(camera: Camera) -> dict[str, bool]:
+        return {**DEFAULT_CAMERA_FEATURES, **(camera.features_json or {})}
+
+    def _build_worker(self, camera: Camera) -> CameraWorker:
+        # Todas leem as regras persistidas; /features acompanha a padrão.
+        features = self._camera_features(camera)
+        feature_manager = FeatureManager.from_camera_features(features)
+        worker = CameraWorker(
             self.app,
             self.socketio,
             feature_manager,
@@ -220,7 +232,10 @@ class MonitorService:
             pose_estimator=self.pose_estimator,
             inference_lock=self._inference_lock,
             servico_llm=self._criar_servico_llm(),
+            prevention_config=camera.prevention_json,
         )
+        worker.features_configuradas = features
+        return worker
 
     def _criar_servico_llm(self):
         """Servico de segunda opiniao para UMA camera, ou None.
@@ -291,6 +306,12 @@ class MonitorService:
 
     def latest_analysis(self, camera_id: int | None = None) -> dict[str, Any] | None:
         return self._get_worker(camera_id).latest_analysis()
+
+    def update_alert_snapshot(self, payload: dict[str, Any]) -> None:
+        with self._workers_lock:
+            worker = self._workers.get(payload.get("camera_id"))
+        if worker is not None:
+            worker.alert_state_service.apply_external_update(payload)
 
     def settings(self, camera_id: int | None = None) -> dict[str, Any]:
         return self._get_worker(camera_id).settings()

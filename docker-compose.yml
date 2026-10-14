@@ -25,7 +25,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${PORT:-5000}:5000"
+      - "${PORT:-5000}:${PORT:-5000}"
     volumes:
       # Só os pesos YOLO — não estão no repositório (ver .gitignore: *.pt).
       # O bind-mount do projeto inteiro (`.:/app`) foi removido: ele
@@ -33,8 +33,10 @@ services:
       # o reload do servidor de desenvolvimento, que não roda mais aqui.
       - ./models:/app/models:ro
       - visionepi_runtime:/app/runtime
+      - visionepi_instance:/app/instance
     # command herdado do Dockerfile (gunicorn) — sem `python run.py`.
 
 volumes:
   postgres_data:
   visionepi_runtime:
+  visionepi_instance:

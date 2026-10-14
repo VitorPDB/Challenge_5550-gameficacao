@@ -324,3 +324,26 @@ def test_soneca_segue_a_pessoa_quando_ela_anda(app):
             for _ in range(3):
                 resultado = service.process([_com_caixa(pid, 100 + deslocamento, 100, 300 + deslocamento, 500)])
             assert resultado["active"] == [], pid
+
+
+def test_identical_active_alerts_are_not_broadcast_for_every_frame(app):
+    with app.app_context():
+        socket = DummySocket()
+        service = AlertStateService(AlertRepository(), socket, create_after_frames=1, intervalo_touch=3600)
+        service.process([missing_helmet()])
+        socket.events.clear()
+        for _ in range(50):
+            service.process([missing_helmet()], deteccao_nova=False)
+        assert not [event for event, _ in socket.events if event == "active_alerts"]
+
+
+def test_false_positive_stays_resolved_while_violation_continues(app):
+    with app.app_context():
+        repository = AlertRepository()
+        service = AlertStateService(repository, DummySocket(), create_after_frames=1, intervalo_touch=0)
+        payload = service.process([missing_helmet()])["created"][0]
+        repository.mark_false_positive(repository.get(payload["id"]))
+        for _ in range(3):
+            result = service.process([missing_helmet()])
+            assert result["active"] == []
+            assert result["created"] == []

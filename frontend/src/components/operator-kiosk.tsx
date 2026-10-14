@@ -4,6 +4,8 @@ import { MuteToggle } from "./layout";
 import { getCameraStatus, startCamera } from "../api/endpoints";
 import type { Alert, MonitorStatus } from "../api/types";
 import { PPE_KEYS, PPE_LABELS } from "../api/ppe";
+import { monitoringProblem, ppeChipState } from "../utils/monitoring";
+import { MissionsPanel, PreventionPanel } from "./prevention";
 
 // Só os itens de EPI viram chip de conformidade no rodapé: pose/quedas/
 // postura/área de risco não têm um "objeto vestível" pra checar.
@@ -57,14 +59,15 @@ export function OperatorKiosk({ camId }: { camId: number }) {
 
   const running = Boolean(status?.running);
   const activeAlerts = status?.active_alerts ?? [];
-  const state = kioskStateFromAlerts(running, activeAlerts);
+  const problem = monitoringProblem(status);
+  const state = kioskStateFromAlerts(running && !problem, activeAlerts);
   const critical = activeAlerts.find((a) => a.severity === "critical" || a.severity === "high");
   const primaryAlert = critical || activeAlerts[0] || null;
   const hasAlert = running && activeAlerts.length > 0;
 
-  const bannerTitle = !running ? "Monitoramento parado" : primaryAlert ? primaryAlert.message : "Tudo conforme";
-  const bannerSub = !running
-    ? "Inicie o monitoramento para começar a receber o feed em tempo real."
+  const bannerTitle = problem ?? (primaryAlert ? primaryAlert.message : "Sem alertas ativos");
+  const bannerSub = problem
+    ? !running ? "Inicie o monitoramento para receber o vídeo." : "A verificação depende de imagens atuais da câmera."
     : primaryAlert
       ? [primaryAlert.rule, primaryAlert.feature].filter(Boolean).join(" · ")
       : "Nenhum alerta ativo no momento.";
@@ -90,8 +93,8 @@ export function OperatorKiosk({ camId }: { camId: number }) {
       <div className={`card kiosk-video ${state === "critical" ? "critical" : ""}`.trim()}>
         <div className="over-video">
           <span className="over-pill">
-            <span className={`dot ${running ? "ok" : "off"}`} />
-            {running ? "Recebendo" : "Parado"}
+            <span className={`dot ${running && !problem ? "ok" : "off"}`} />
+            {problem ?? "Recebendo"}
           </span>
           <span className="over-pill">{camera.name}</span>
         </div>
@@ -111,10 +114,12 @@ export function OperatorKiosk({ camId }: { camId: number }) {
         <div className="actions">
           {COMPLIANCE_KEYS.filter((key) => camera.features[key]).map((key) => {
             const violated = activeAlerts.some((a) => a.feature === key);
+            const chipState = ppeChipState(status, key, violated);
+            const label = status?.model?.supported_ppe?.[key] === false ? "indisponível" : "não verificado";
             return (
-              <span key={key} className={`chip ${violated ? "miss" : "ok"}`}>
+              <span key={key} className={`chip ${chipState}`}>
                 <span className="dot" />
-                {COMPLIANCE_LABELS[key]}
+                {COMPLIANCE_LABELS[key]}{chipState === "waiting" ? `: ${label}` : ""}
               </span>
             );
           })}
@@ -150,6 +155,8 @@ export function OperatorKiosk({ camId }: { camId: number }) {
           </button>
         </div>
       )}
+      <PreventionPanel key={`prevention-${camId}`} cameraId={camId} />
+      <MissionsPanel key={`missions-${camId}`} cameraId={camId} />
     </div>
   );
 }

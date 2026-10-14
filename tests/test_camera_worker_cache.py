@@ -34,6 +34,8 @@ class DetectorDuble:
 
     def __init__(self, deteccoes: list[Detection] | None = None) -> None:
         self.chamadas = 0
+        self.confidence = 0.35
+        self.max_detections = 100
         self._deteccoes = deteccoes or []
 
     def detect(self, frame):  # noqa: ARG002
@@ -159,3 +161,32 @@ def test_sem_intercalacao_toda_iteracao_infere(worker):
         worker._analyze_frame(FRAME)
 
     assert worker.detector.chamadas == 4
+
+
+def test_modelo_unico_preserva_identidade_ao_mudar_ordem_das_pessoas(worker):
+    worker.detect_every_n = 1
+    esquerda = Detection("person", 0.9, BoundingBox(10, 10, 110, 310), category="person")
+    direita = Detection("person", 0.9, BoundingBox(210, 10, 310, 310), category="person")
+    worker.detector._deteccoes = [esquerda, direita]
+    primeira = worker._analyze_frame(FRAME)
+    ids = {item.box.x1: item.track_id for item in primeira.detections}
+    assert None not in ids.values()
+    worker.detector._deteccoes = [direita, esquerda]
+    segunda = worker._analyze_frame(FRAME)
+    assert {item.box.x1: item.track_id for item in segunda.detections} == ids
+    assert worker.person_detector.chamadas == 0
+
+
+def test_fps_runtime_muda_o_worker_sem_afetar_config_de_outras_cameras(worker, monkeypatch):
+    monkeypatch.setattr(worker, "_emit_timeline_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker, "_emitir", lambda *args: None)
+    worker.app.config["TARGET_FPS"] = 12
+    result = worker.update_settings({"target_fps": 30})
+    assert result["target_fps"] == 30
+    assert worker.target_fps == 30
+    assert worker.app.config["TARGET_FPS"] == 12
+
+
+def test_settings_informa_fps_da_camera(worker):
+    worker.target_fps = 24
+    assert worker.settings()["target_fps"] == 24

@@ -51,10 +51,19 @@ class AlertRepository:
     def get(self, alert_id: int) -> Alert | None:
         return db.session.get(Alert, int(alert_id))
 
+    def get_by_frame_ref(self, frame_ref: str) -> Alert | None:
+        return Alert.query.filter_by(frame_ref=frame_ref).first()
+
+    def list_active_for_camera(self, camera_id: int | None) -> list[Alert]:
+        return Alert.query.filter_by(camera_id=camera_id, status="active").order_by(Alert.last_seen_at.desc()).all()
+
     def touch(self, alert: Alert, *, metadata: dict[str, Any] | None = None, incremento: int = 1) -> Alert:
         """Renova o alerta ativo. `incremento` permite gravar de uma vez as
         ocorrências acumuladas desde o último commit — ver
         AlertStateService.intervalo_touch, que espaça esta gravação."""
+        db.session.refresh(alert, attribute_names=["status", "metadata_json"])
+        if alert.status != "active":
+            return alert
         preservadas: dict[str, Any] = {}
         if metadata is not None:
             # O worker regrava a metadata inteira a cada renovacao, mas o

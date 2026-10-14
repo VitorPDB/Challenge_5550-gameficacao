@@ -8,9 +8,10 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from app.api.placeholder import placeholder_jpeg
 from app.extensions import db
 from app.llm import MARCA_DE_REDACAO
-from app.services.gate_service import normalizar_exigidos
 from app.models import DEFAULT_CAMERA_FEATURES, ROLE_OPERATOR, ROLE_TECHNICAL, Camera
+from app.services.gate_service import normalizar_exigidos
 from app.utils.auth import camera_permitida, camera_scope, erro_fora_do_escopo, login_required, require_role
+from app.utils.stream_access import stream_access_check
 from app.vision.video_stream import capture_api
 
 cameras_bp = Blueprint("cameras", __name__)
@@ -301,6 +302,7 @@ def camera_video_feed(camera_id: int):
         return jsonify({"error": "câmera não encontrada"}), 404
     monitor = current_app.extensions["monitor_service"]
     target_fps = max(1, int(camera.fps or 12))
+    access_allowed = stream_access_check(camera_id)
 
     def generate():
         # Manda cada frame UMA vez, esperando aparecer um novo em vez de
@@ -314,6 +316,8 @@ def camera_video_feed(camera_id: int):
         ultima_versao = -1
         ultimo_envio = time.monotonic()
         while True:
+            if not access_allowed():
+                return
             try:
                 jpeg, versao = monitor.latest_jpeg_versionado(camera_id=camera_id)
             except LookupError:

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.services.gate_service import GateState, avaliar_quadro, normalizar_exigidos
 
 
